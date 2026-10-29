@@ -52,7 +52,8 @@ final class ClipboardFeature: Feature {
             open: { [weak self] in self?.open($0) },
             showTab: { [weak self] in self?.context.model.select(.clipboard) },
             searchFocused: { [weak self] in self?.searchDidFocus() },
-            openPrivacySettings: { Self.openPrivacySettings() })
+            openPrivacySettings: { Self.openPrivacySettings() },
+            clear: { [weak self] in self?.clearHistory() })
         let store = store, state = state
         context.registerTab(.clipboard) { ClipboardTabView(store: store, state: state, actions: actions) }
         context.registerHomeCard { ClipboardHomeCard(store: store, state: state, actions: actions) }
@@ -291,6 +292,12 @@ final class ClipboardFeature: Feature {
     }
 
     /// Deletes an entry and selects the one that took its place.
+    private func clearHistory() {
+        store.clearUnpinned()
+        state.selectedID = nil
+        state.requestFocus()
+    }
+
     private func delete(_ id: UUID) {
         let visible = ClipboardStore.filter(store.items, query: state.query, pinnedOnly: state.pinnedOnly)
         let index = visible.firstIndex { $0.id == id }

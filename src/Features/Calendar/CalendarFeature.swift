@@ -12,6 +12,7 @@ final class CalendarFeature: Feature {
         var enabled: Bool
         var days: Int
         var lead: Int          // minutes before a meeting that its alert appears; 0 is off
+        var hidden: Set<String>
     }
 
     private let context: AppContext
@@ -59,7 +60,17 @@ final class CalendarFeature: Feature {
                 self?.joined(event)
                 // You're off to the meeting; the open panel would sit over the menu bar.
                 if !notch.pinned { notch.close() }
-            })
+            },
+            toggleCalendar: { id in
+                notch.updateConfig { config in
+                    if let i = config.hiddenCalendars.firstIndex(of: id) {
+                        config.hiddenCalendars.remove(at: i)
+                    } else {
+                        config.hiddenCalendars.append(id)
+                    }
+                }
+            },
+            loadCalendars: { [weak self] in self?.loadCalendars() })
 
         context.registerTab(.calendar) { CalendarTabView(model: model) }
         context.registerHomeCard { CalendarHomeCard(model: model) }
@@ -98,16 +109,18 @@ final class CalendarFeature: Feature {
     // MARK: Settings and access
 
     private func apply(_ config: Config) {
-        let next = Settings(enabled: config.calendarEnabled, days: config.calendarDays, lead: config.meetingAlertMinutes)
+        let next = Settings(enabled: config.calendarEnabled, days: config.calendarDays, lead: config.meetingAlertMinutes,
+                            hidden: Set(config.hiddenCalendars))
         guard next != settings else { return }
         let before = settings
         settings = next
         model.days = next.days + 1
+        model.hiddenCalendars = next.hidden
         if !next.enabled {
             disable()
         } else if before?.enabled != true {
             enable()
-        } else if before?.days != next.days {
+        } else if before?.days != next.days || before?.hidden != next.hidden {
             refresh()
         } else {
             checkAlerts()
@@ -178,6 +191,8 @@ final class CalendarFeature: Feature {
         model.loaded = false
         model.browseEvents = nil
         model.busyDays = []
+        model.calendars = []
+        model.choosingCalendars = false
         context.activities.removeAll(prefix: CalendarAlerts.prefix)
     }
 
@@ -191,6 +206,7 @@ final class CalendarFeature: Feature {
         generation += 1
         let current = generation
         let calendar = model.calendar
+        let hidden = hiddenCalendars
         let from = calendar.startOfDay(for: Date())
         guard let to = calendar.date(byAdding: .day, value: model.days, to: from) else { return }
         // After midnight the grid follows today, unless you've picked a day.
@@ -200,7 +216,7 @@ final class CalendarFeature: Feature {
         }
         refreshedDay = from
         Task { [weak self] in
-            let events = await source.events(from: from, to: to)
+            let events = await source.events(from: from, to: to, hidden: hidden)
             guard let self, current == self.generation else { return }
             self.model.upcoming = events
             self.model.loaded = true
@@ -208,6 +224,20 @@ final class CalendarFeature: Feature {
         }
         if let start = model.browseStart { browse(start) }
         if let gridMonth { loadMonth(gridMonth) }
+        loadCalendars()
+    }
+
+    private var hiddenCalendars: Set<String> { settings?.hidden ?? [] }
+
+    /// The picker's list and the hidden count beside quick add; reloaded with the events, so
+    /// a calendar added elsewhere shows up.
+    private func loadCalendars() {
+        guard model.access == .granted, let source else { return }
+        Task { [weak self] in
+            let calendars = await source.calendars()
+            guard let self, self.model.access == .granted else { return }
+            self.model.calendars = calendars
+        }
     }
 
     /// EventKit posts a burst of change notifications for one edit; wait for it to settle.
@@ -223,8 +253,9 @@ final class CalendarFeature: Feature {
     private func browse(_ day: Date) {
         guard model.access == .granted, let source,
               let end = model.calendar.date(byAdding: .day, value: model.days, to: day) else { return }
+        let hidden = hiddenCalendars
         Task { [weak self] in
-            let events = await source.events(from: day, to: end)
+            let events = await source.events(from: day, to: end, hidden: hidden)
             guard let self, self.model.browseStart == day else { return }
             self.model.browseEvents = events
         }
@@ -236,8 +267,9 @@ final class CalendarFeature: Feature {
         let days = CalendarMonthLayout.days(month: month, calendar: calendar)
         guard model.access == .granted, let source, let first = days.first, let last = days.last,
               let end = calendar.date(byAdding: .day, value: 1, to: last) else { return }
+        let hidden = hiddenCalendars
         Task { [weak self] in
-            let events = await source.events(from: first, to: end, details: false)
+            let events = await source.events(from: first, to: end, details: false, hidden: hidden)
             guard let self, self.model.month == month else { return }
             self.model.busyDays = CalendarAgenda.busyDays(events, from: first, to: end, calendar: calendar)
         }
@@ -277,7 +309,9 @@ final class CalendarFeature: Feature {
         DispatchQueue.main.asyncAfter(deadline: .now() + 4, execute: work)
     }
 
+    /// Each time the tab opens it shows the month grid, not the calendar list left open.
     private func tabShown() {
+        model.choosingCalendars = false
         if settings?.enabled == true && model.access != .granted { updateAccess(ask: false) }
     }
 
@@ -501,6 +535,7 @@ final class CalendarFeature: Feature {
 
 extension CalendarFeature {
     func debugState() -> [String: Any] {
-        ["access": String(describing: model.access), "loaded": model.loaded, "upcoming": model.upcoming.count]
+        ["access": String(describing: model.access), "loaded": model.loaded, "upcoming": model.upcoming.count,
+         "hiddenCalendars": model.hiddenCalendars.count]
     }
 }

@@ -22,7 +22,11 @@ To try the states before real activities exist, use the menu bar icon's Test Act
   ⌘T new tab, ⌘W close, ⌘1–9 switch, ⌘K clear, ⌘+ and ⌘− font size, ⌘F find. The pin
   keeps it open when you click elsewhere. Right-click the icon for the menu.
 - **Clipboard:** Control-Option-V opens the history with search focused. Arrows and Return
-  copy; ⌘1–9 copy the Nth; ⌘P pins.
+  copy; ⌘1–9 copy the Nth; ⌘P pins. The trash button by Pinned clears the history (click
+  it twice); pinned items stay.
+- **Calendar:** the button beside quick add lists your calendars; uncheck one (say, Holidays
+  in India) to drop its events from the agenda, Home and meeting alerts. Saved as
+  `hiddenCalendars`.
 - **Quick Capture:** Control-Option-N, type, Return. It lands in `quickCaptureFile`.
 - **Shelf:** drag files onto the notch. Each comes off the Shelf 24 hours after you added it
   (`shelfKeepHours`); only off the Shelf, the file itself stays where it is.

@@ -14,6 +14,9 @@ final class ClipboardViewState: ObservableObject {
     /// The entry being copied back while its image file is read; its row is dimmed, and
     /// other copies are ignored until it's done.
     @Published var copyingID: UUID?
+    /// Clear was clicked once; the next click clears. Goes back after a few seconds.
+    @Published var confirmingClear = false { didSet { if confirmingClear { clearAsks += 1 } } }
+    private(set) var clearAsks = 0
 
     /// The selected entry, or the first one when nothing (or something filtered out) is selected.
     func selection(in visible: [ClipboardItem]) -> ClipboardItem? {
@@ -36,6 +39,7 @@ final class ClipboardViewState: ObservableObject {
         query = ""
         pinnedOnly = false
         selectedID = nil
+        confirmingClear = false
         focusRequest += 1
     }
 
@@ -51,6 +55,7 @@ struct ClipboardActions {
     var showTab: () -> Void = {}
     var searchFocused: () -> Void = {}                // the search field just took focus
     var openPrivacySettings: () -> Void = {}
+    var clear: () -> Void = {}                        // everything but pinned entries
 }
 
 enum ClipboardFormat {
@@ -160,6 +165,20 @@ struct ClipboardTabView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    /// Two clicks: the first asks, the second clears. Unanswered, the ask goes away.
+    private func clearTapped() {
+        if state.confirmingClear {
+            state.confirmingClear = false
+            actions.clear()
+        } else {
+            state.confirmingClear = true
+            let ask = state.clearAsks
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [state] in
+                if state.clearAsks == ask { state.confirmingClear = false }
+            }
+        }
+    }
+
     /// Focus lands after the panel has become the key window.
     private func focusSearch() {
         guard snapshotDate == nil else { return }
@@ -201,6 +220,13 @@ struct ClipboardTabView: View {
                 state.pinnedOnly.toggle()
             }
             .help("Show only pinned items")
+
+            if store.items.contains(where: { !$0.pinned }) {
+                ClipboardChip(symbol: "trash", title: state.confirmingClear ? "Clear all?" : nil,
+                              active: state.confirmingClear, action: clearTapped)
+                    .help(state.confirmingClear ? "Click again to clear the history (pinned items stay)"
+                                                : "Clear the history (pinned items stay)")
+            }
 
             Text(state.paused ? "Paused" : "\(count)")
                 .font(NotchStyle.smallFont)

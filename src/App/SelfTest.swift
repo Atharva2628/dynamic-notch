@@ -108,6 +108,8 @@ enum SelfTest {
         check(cfg?.tabs.prefix(2) == [.shelf, .home] && cfg?.tabs.count == NotchTab.allCases.count,
               "tab order kept, unknown and repeated names dropped, missing tabs appended")
         check(cfg?.hiddenTabs == [.prompter], "unknown hidden tabs are ignored")
+        check((try? JSONDecoder().decode(Config.self, from: Data(#"{"hiddenCalendars": ["a", "b"]}"#.utf8)))?.hiddenCalendars == ["a", "b"],
+              "hidden calendars are read")
         check((try? JSONDecoder().decode(Config.self, from: Data("{}".utf8))) == Config(), "an empty file means defaults")
         check((try? JSONDecoder().decode(Config.self, from: Data(#"{"collapseDelay": "soon"}"#.utf8)))?.collapseDelay == 0.1,
               "a wrong type falls back to the default")

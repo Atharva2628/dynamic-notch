@@ -34,17 +34,40 @@ final class CalendarEventSource: @unchecked Sendable {
         }
     }
 
-    /// Events overlapping `start..<end` in every calendar, sorted by start. Without
-    /// `details`, skips the meeting-link search and attendees (for the month grid's dots).
-    func events(from start: Date, to end: Date, details: Bool = true) async -> [CalendarEvent] {
+    /// Events overlapping `start..<end` in every calendar except `hidden`, sorted by start.
+    /// Without `details`, skips the meeting-link search and attendees (for the month grid's dots).
+    func events(from start: Date, to end: Date, details: Bool = true, hidden: Set<String> = []) async -> [CalendarEvent] {
         await withCheckedContinuation { continuation in
             queue.async {
                 let store = self.currentStore()
-                let predicate = store.predicateForEvents(withStart: start, end: end, calendars: nil)
+                var calendars: [EKCalendar]? = nil
+                if !hidden.isEmpty {
+                    let shown = store.calendars(for: .event).filter { !hidden.contains($0.calendarIdentifier) }
+                    // An empty list isn't "none" to EventKit; with every calendar hidden there's nothing to read.
+                    guard !shown.isEmpty else {
+                        continuation.resume(returning: [])
+                        return
+                    }
+                    calendars = shown
+                }
+                let predicate = store.predicateForEvents(withStart: start, end: end, calendars: calendars)
                 let events = store.events(matching: predicate)
                     .map { CalendarEvent(event: $0, details: details) }
                     .sorted { ($0.start, $0.title) < ($1.start, $1.title) }
                 continuation.resume(returning: events)
+            }
+        }
+    }
+
+    /// Every event calendar, for the list that picks which ones show.
+    func calendars() async -> [CalendarChoice] {
+        await withCheckedContinuation { continuation in
+            queue.async {
+                let choices = self.currentStore().calendars(for: .event).map { c in
+                    CalendarChoice(id: c.calendarIdentifier, title: c.title,
+                                   account: c.source?.title ?? "Other", color: CalendarEvent.color(c.cgColor))
+                }
+                continuation.resume(returning: choices)
             }
         }
     }
@@ -108,7 +131,7 @@ extension CalendarEvent {
             uid: uid?.isEmpty == false ? uid : nil)
     }
 
-    private static func color(_ cg: CGColor?) -> CalendarColor {
+    fileprivate static func color(_ cg: CGColor?) -> CalendarColor {
         guard let cg, let srgb = CGColorSpace(name: CGColorSpace.sRGB),
               let c = cg.converted(to: srgb, intent: .defaultIntent, options: nil),
               let parts = c.components, parts.count >= 3 else { return .fallback }

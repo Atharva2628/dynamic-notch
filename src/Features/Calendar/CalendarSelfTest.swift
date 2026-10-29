@@ -37,6 +37,19 @@ extension CalendarFeature {
         check(CalendarLinks.find(url: nil, location: "http://meet.google.com/abc-defg-hij", notes: nil)?.url.scheme == "https",
               "calendar: meeting links are upgraded to https")
 
+        // Choosing calendars.
+        let groups = CalendarChoices.grouped([
+            CalendarChoice(id: "w", title: "Work", account: "Google"),
+            CalendarChoice(id: "h", title: "Holidays in India", account: "Subscribed Calendars"),
+            CalendarChoice(id: "b", title: "Birthdays", account: "Google"),
+        ])
+        check(groups.map(\.account) == ["Google", "Subscribed Calendars"] && groups.first?.calendars.map(\.id) == ["b", "w"],
+              "calendar: the picker groups calendars by account, sorted by title")
+        let picking = CalendarModel(access: .granted, now: Date())
+        picking.calendars = [CalendarChoice(id: "w", title: "Work", account: "Google")]
+        picking.hiddenCalendars = ["w", "gone"]
+        check(picking.hiddenCount == 1, "calendar: the hidden count leaves out calendars that no longer exist")
+
         // Quick add against a fixed reference date: Monday Oct 26 2026, 16:30.
         let ref = oct26(16, 30)
         func draft(_ text: String, _ phrase: String, _ date: Date, duration: TimeInterval = 0,
@@ -261,6 +274,16 @@ extension CalendarFeature {
         let typing = CalendarSamples.model()
         typing.typing = true
         typing.draftText = "lunch fri 1pm"
+        let picking = CalendarSamples.model()
+        picking.choosingCalendars = true
+        picking.calendars = [
+            CalendarChoice(id: "work", title: "Work", account: "iCloud", color: CalendarColor(red: 0.25, green: 0.56, blue: 1)),
+            CalendarChoice(id: "home", title: "Home", account: "iCloud", color: CalendarColor(red: 1, green: 0.62, blue: 0.22)),
+            CalendarChoice(id: "personal", title: "Personal", account: "iCloud", color: CalendarColor(red: 0.66, green: 0.45, blue: 0.98)),
+            CalendarChoice(id: "holidays", title: "Holidays in India", account: "Other", color: CalendarColor(red: 0.3, green: 0.8, blue: 0.4)),
+            CalendarChoice(id: "birthdays", title: "Birthdays", account: "Other", color: CalendarColor(red: 0.6, green: 0.6, blue: 0.6)),
+        ]
+        picking.hiddenCalendars = ["holidays"]
         func tab(_ model: CalendarModel) -> AnyView {
             AnyView(CalendarTabView(model: model)
                 .frame(width: 758, height: 186)
@@ -277,6 +300,7 @@ extension CalendarFeature {
         return [
             ("calendar-tab", tab(CalendarSamples.model())),
             ("calendar-tab-quick-add", tab(typing)),
+            ("calendar-tab-choose-calendars", tab(picking)),
             ("calendar-tab-no-access", tab(CalendarSamples.model(access: .denied))),
             ("calendar-card", card(CalendarSamples.model())),
             ("calendar-card-no-access", card(CalendarSamples.model(access: .denied))),

@@ -15,6 +15,10 @@ struct CalendarActions {
     var startTyping: @MainActor () -> Void = {}
     /// Opens the event's meeting link; also dismisses its alert.
     var join: @MainActor (CalendarEvent) -> Void = { _ in }
+    /// Shows or hides one calendar's events everywhere (agenda, Home, alerts).
+    var toggleCalendar: @MainActor (String) -> Void = { _ in }
+    /// Reads the calendar list for the picker.
+    var loadCalendars: @MainActor () -> Void = {}
 }
 
 /// The calendar's state as the tab and the Home card show it. The feature fills it from
@@ -51,6 +55,11 @@ final class CalendarModel: ObservableObject {
     @Published var typing = false
     /// A quick-add save is in flight; Return does nothing until it's done.
     @Published var saving = false
+    /// The month grid's place shows the list of calendars, each with a switch.
+    @Published var choosingCalendars = false
+    @Published var calendars: [CalendarChoice] = []
+    /// From `hiddenCalendars`; the feature keeps it in step with the settings.
+    @Published var hiddenCalendars: Set<String> = []
 
     /// Days the agenda covers: today plus `calendarDays`.
     var days = 8
@@ -145,6 +154,14 @@ final class CalendarModel: ObservableObject {
     func tabAppeared() {
         actions.loadMonth(month)
     }
+
+    func toggleChoosingCalendars() {
+        choosingCalendars.toggle()
+        if choosingCalendars && calendars.isEmpty { actions.loadCalendars() }
+    }
+
+    /// Calendars hidden that still exist; a deleted calendar's id stays in the settings harmlessly.
+    var hiddenCount: Int { calendars.filter { hiddenCalendars.contains($0.id) }.count }
 
     private func showMonth(_ m: Date) {
         month = m

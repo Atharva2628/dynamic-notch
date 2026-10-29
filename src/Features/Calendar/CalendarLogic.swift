@@ -50,6 +50,36 @@ struct CalendarEvent: Identifiable, Equatable, Sendable {
     }
 }
 
+/// One calendar in the Calendar app, for the list that picks which ones show.
+struct CalendarChoice: Identifiable, Equatable, Sendable {
+    var id: String          // EKCalendar.calendarIdentifier, what `hiddenCalendars` stores
+    var title: String
+    var account: String     // iCloud, Google, Subscribed Calendars, Other…
+    var color = CalendarColor.fallback
+}
+
+enum CalendarChoices {
+    struct Group: Equatable {
+        var account: String
+        var calendars: [CalendarChoice]
+    }
+
+    /// By account, in the order the accounts first appear, each sorted by title.
+    static func grouped(_ calendars: [CalendarChoice]) -> [Group] {
+        var order: [String] = []
+        var byAccount: [String: [CalendarChoice]] = [:]
+        for c in calendars {
+            if byAccount[c.account] == nil { order.append(c.account) }
+            byAccount[c.account, default: []].append(c)
+        }
+        return order.map { account in
+            Group(account: account, calendars: byAccount[account, default: []].sorted {
+                $0.title.localizedStandardCompare($1.title) == .orderedAscending
+            })
+        }
+    }
+}
+
 // MARK: - Meeting links
 
 enum CalendarMeetingService: String, Sendable {

@@ -13,14 +13,23 @@ struct CalendarTabView: View {
             if model.access == .granted {
                 HStack(alignment: .top, spacing: 18) {
                     VStack(alignment: .leading, spacing: 8) {
-                        CalendarQuickAddBar(model: model)
+                        HStack(spacing: 6) {
+                            CalendarQuickAddBar(model: model)
+                            CalendarPickerButton(model: model)
+                        }
                         CalendarAgendaList(model: model)
                     }
                     // minHeight 0: never taller than the tab, so anything too tall is cut at
                     // the bottom rather than centered with the quick-add bar cut off the top.
                     .frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .topLeading)
-                    CalendarMonthGrid(model: model)
-                        .frame(width: 196)
+                    Group {
+                        if model.choosingCalendars {
+                            CalendarPicker(model: model)
+                        } else {
+                            CalendarMonthGrid(model: model)
+                        }
+                    }
+                    .frame(width: 196)
                 }
             } else {
                 CalendarAccessNotice(model: model, compact: false)
@@ -483,6 +492,132 @@ private struct CalendarDayCell: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Choosing calendars
+
+/// Beside quick add: swaps the month grid for the list of calendars. Says how many are hidden.
+private struct CalendarPickerButton: View {
+    @ObservedObject var model: CalendarModel
+
+    var body: some View {
+        let hidden = model.hiddenCount
+        let active = model.choosingCalendars
+        Button { model.toggleChoosingCalendars() } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "line.3.horizontal.decrease")
+                    .font(.system(size: 11, weight: .semibold))
+                if hidden > 0 {
+                    Text("\(hidden)").font(.system(size: 10, weight: .semibold)).monospacedDigit()
+                }
+            }
+            .foregroundStyle(active ? Color.black : (hidden > 0 ? Color.orange : NotchStyle.secondary))
+            .padding(.horizontal, 8)
+            .frame(minWidth: 28)
+            .frame(height: 28)
+            .background(active ? Color.white : NotchStyle.card, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .help("Choose which calendars show")
+    }
+}
+
+/// In the month grid's place: every calendar by account, with a check for the ones shown.
+/// A hidden calendar's events leave the agenda, the Home card and meeting alerts.
+private struct CalendarPicker: View {
+    @ObservedObject var model: CalendarModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 4) {
+                Text("Calendars")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white)
+                Spacer(minLength: 4)
+                Button { model.toggleChoosingCalendars() } label: {
+                    Text("Done")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(Color.white.opacity(0.14), in: Capsule())
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+            .frame(height: 20)
+
+            if model.calendars.isEmpty {
+                Text("Loading…")
+                    .font(NotchStyle.smallFont)
+                    .foregroundStyle(NotchStyle.tertiary)
+            } else if model.isSnapshot {
+                list.frame(minHeight: 0, maxHeight: .infinity, alignment: .top).clipped()
+            } else {
+                ScrollView(.vertical) { list }
+                    .scrollIndicators(.never)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var list: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            ForEach(CalendarChoices.grouped(model.calendars), id: \.account) { group in
+                Text(group.account)
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .foregroundStyle(NotchStyle.tertiary)
+                    .lineLimit(1)
+                    .padding(.top, 4)
+                    .padding(.leading, 2)
+                ForEach(group.calendars) { choice in
+                    CalendarChoiceRow(choice: choice, shown: !model.hiddenCalendars.contains(choice.id)) {
+                        model.actions.toggleCalendar(choice.id)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct CalendarChoiceRow: View {
+    let choice: CalendarChoice
+    let shown: Bool
+    let toggle: () -> Void
+    private let hovering = State(initialValue: false)   // @State is a macro, unavailable without Xcode
+
+    var body: some View {
+        Button(action: toggle) {
+            HStack(spacing: 7) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(shown ? choice.color.swatch : Color.clear)
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .stroke(choice.color.swatch, lineWidth: 1.5)
+                    if shown {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 8, weight: .heavy))
+                            .foregroundStyle(.white)
+                    }
+                }
+                .frame(width: 12, height: 12)
+                Text(choice.title)
+                    .font(NotchStyle.smallFont)
+                    .foregroundStyle(shown ? Color.white : NotchStyle.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 4)
+            .frame(height: 20)
+            .background(hovering.wrappedValue ? NotchStyle.card : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering.wrappedValue = $0 }
     }
 }
 

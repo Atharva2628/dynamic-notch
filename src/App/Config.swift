@@ -41,6 +41,7 @@ struct Config: Codable, Equatable {
     var calendarEnabled = true
     var calendarDays = 7
     var meetingAlertMinutes = 5
+    var hiddenCalendars: [String] = []   // EventKit calendar identifiers, picked in the Calendar tab
 
     // Status
     var capsLockHUD = true
@@ -122,6 +123,7 @@ struct Config: Codable, Equatable {
         calendarEnabled = value(.calendarEnabled, d.calendarEnabled)
         calendarDays = integer(.calendarDays, d.calendarDays, 1...31)
         meetingAlertMinutes = integer(.meetingAlertMinutes, d.meetingAlertMinutes, 0...60)
+        hiddenCalendars = value(.hiddenCalendars, d.hiddenCalendars)
 
         capsLockHUD = value(.capsLockHUD, d.capsLockHUD)
         cameraGuard = value(.cameraGuard, d.cameraGuard)
