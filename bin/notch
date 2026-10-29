@@ -1,0 +1,265 @@
+#!/bin/sh
+# notch: post to Dynamic Notch from any script or terminal.
+#
+# Sends one JSON line {"type":"cli","token":T,"cmd":...} to the app's local socket
+# ($HOME/Library/Application Support/DynamicNotch/bridge.sock, token from bridge.token)
+# and prints the app's error, if any. Exit status: 0 when the app took the command, 1
+# otherwise (bad arguments, app not running, or the app refused it).
+#
+# nc stops sending when its input ends (it shuts down its side of the socket), which the
+# app takes for "the client went away" and drops the reply. So nc reads from a FIFO that
+# this script holds open until nc has the reply and exits.
+
+set -u
+
+PROG=notch
+D="${HOME:?HOME is not set}/Library/Application Support/DynamicNotch"
+SOCK="$D/bridge.sock"
+TOKEN_FILE="$D/bridge.token"
+TABS="home terminal agents system calendar clipboard shelf prompter settings"
+
+usage() {
+    cat <<EOF
+Usage:
+  notch post TEXT [--title T] [--icon SYMBOL] [--tint COLOR] [--for SECONDS] [--id ID]
+  notch progress ID FRACTION [--title T]
+  notch done ID [TEXT]
+  notch remove ID
+  notch open [TAB]
+  notch close
+  notch state
+  notch help
+
+  post      Shows TEXT in the notch for --for seconds (default 8); it peeks for
+            the first 8 at most. --for 0 keeps it, collapsed, until "notch remove
+            ID". Posting the same --id again replaces it (the default id is
+            "message").
+  progress  Shows a progress ring; FRACTION is 0 to 1 (or a percentage like 40%).
+  done      Turns ID into a check mark for 6 s, with TEXT if given.
+  remove    Removes ID.
+  open      Opens the notch, on TAB if given: $TABS.
+  close     Closes the notch.
+  state     Prints the app's live state as JSON (for troubleshooting).
+
+  SYMBOL is an SF Symbol name (bell.fill). COLOR is one of white, green, orange, red,
+  blue, purple, yellow. IDs use letters, digits, dot, dash and underscore.
+
+Examples:
+  notch post "Build done" --for 5
+  notch progress render 0.4 --title "Rendering"
+  notch done render "Rendered in 42 s"
+EOF
+}
+
+die() {
+    printf '%s: %s\n' "$PROG" "$1" >&2
+    exit 1
+}
+
+# json_str VALUE: prints VALUE as a JSON string literal, quotes included. Escapes the
+# backslash, the double quote and every control character; other bytes (UTF-8) pass
+# through. The value travels in the environment, so awk never interprets its escapes.
+json_str() {
+    NOTCH_JSON_VALUE=$1 LC_ALL=C /usr/bin/awk 'BEGIN {
+        for (i = 1; i < 32; i++) code[sprintf("%c", i)] = i
+        s = ENVIRON["NOTCH_JSON_VALUE"]
+        out = ""
+        n = length(s)
+        for (i = 1; i <= n; i++) {
+            c = substr(s, i, 1)
+            if (c == "\\") out = out "\\\\"
+            else if (c == "\"") out = out "\\\""
+            else if (c in code) {
+                k = code[c]
+                if (k == 10) out = out "\\n"
+                else if (k == 9) out = out "\\t"
+                else if (k == 13) out = out "\\r"
+                else out = out sprintf("\\u%04x", k)
+            } else out = out c
+        }
+        printf "\"%s\"", out
+    }'
+}
+
+# reply_error: reads the app's reply on stdin and prints its "error" string, unescaped.
+reply_error() {
+    LC_ALL=C /usr/bin/awk '{
+        if (!match($0, /"error"[ ]*:[ ]*"/)) next
+        s = substr($0, RSTART + RLENGTH)
+        out = ""
+        n = length(s)
+        for (j = 1; j <= n; j++) {
+            c = substr(s, j, 1)
+            if (c == "\"") break
+            if (c == "\\") {
+                j++
+                c = substr(s, j, 1)
+                if (c == "n") c = " "
+                else if (c == "t") c = " "
+                else if (c == "r") c = ""
+                else if (c == "u") c = "\\u"
+            }
+            out = out c
+        }
+        print out
+        exit
+    }'
+}
+
+is_number() {
+    case $1 in
+        "" | . | *[!0-9.]* | *.*.*) return 1 ;;
+    esac
+    return 0
+}
+
+# --- arguments -----------------------------------------------------------------
+
+[ $# -gt 0 ] || { usage >&2; exit 1; }
+CMD=$1
+shift
+case $CMD in
+    help | -h | --help) usage; exit 0 ;;
+    post | progress | done | remove | open | close | state) ;;
+    *) die "unknown command \"$CMD\" (see: notch help)" ;;
+esac
+
+TITLE= ICON= TINT= FOR= ID=
+HAS_TITLE=0 HAS_ICON=0 HAS_TINT=0 HAS_FOR=0 HAS_ID=0
+NPOS=0 P1= P2= ALL= REST=
+
+positional() {
+    NPOS=$((NPOS + 1))
+    if [ $NPOS -eq 1 ]; then
+        P1=$1
+        ALL=$1
+    else
+        [ $NPOS -eq 2 ] && P2=$1
+        ALL="$ALL $1"
+        if [ $NPOS -eq 2 ]; then REST=$1; else REST="$REST $1"; fi
+    fi
+}
+
+allowed() {   # allowed OPTION COMMAND...: dies unless the current command takes OPTION
+    opt=$1
+    shift
+    for c in "$@"; do [ "$c" = "$CMD" ] && return 0; done
+    die "$opt doesn't work with \"$CMD\" (see: notch help)"
+}
+
+while [ $# -gt 0 ]; do
+    arg=$1
+    case $arg in
+        --) shift; for a in "$@"; do positional "$a"; done; break ;;
+        -h | --help) usage; exit 0 ;;
+        --*=*) name=${arg%%=*}; value=${arg#*=} ;;
+        --*)
+            name=$arg
+            [ $# -ge 2 ] || die "$name needs a value"
+            value=$2
+            shift
+            ;;
+        *) positional "$arg"; shift; continue ;;
+    esac
+    case $name in
+        --title) allowed "$name" post progress; TITLE=$value; HAS_TITLE=1 ;;
+        --icon) allowed "$name" post; ICON=$value; HAS_ICON=1 ;;
+        --tint) allowed "$name" post; TINT=$value; HAS_TINT=1 ;;
+        --for) allowed "$name" post; FOR=$value; HAS_FOR=1 ;;
+        --id) allowed "$name" post; ID=$value; HAS_ID=1 ;;
+        *) die "unknown option $name (see: notch help)" ;;
+    esac
+    shift
+done
+
+if [ $HAS_FOR = 1 ] && ! is_number "$FOR"; then
+    die "--for needs a number of seconds, like 5 or 0.5"
+fi
+
+MSG=
+add() { MSG="$MSG,\"$1\":$(json_str "$2")"; }
+
+case $CMD in
+    post)
+        [ $NPOS -ge 1 ] || die "post needs TEXT (see: notch help)"
+        add text "$ALL"
+        [ $HAS_TITLE = 1 ] && add title "$TITLE"
+        [ $HAS_ICON = 1 ] && add icon "$ICON"
+        [ $HAS_TINT = 1 ] && add tint "$TINT"
+        [ $HAS_FOR = 1 ] && add for "$FOR"
+        [ $HAS_ID = 1 ] && add id "$ID"
+        ;;
+    progress)
+        [ $NPOS -eq 2 ] || die "usage: notch progress ID FRACTION [--title T]"
+        case $P2 in
+            *%) is_number "${P2%\%}" || die "FRACTION must be a number from 0 to 1, or a percentage" ;;
+            *) is_number "$P2" || die "FRACTION must be a number from 0 to 1, or a percentage" ;;
+        esac
+        add id "$P1"
+        add fraction "$P2"
+        [ $HAS_TITLE = 1 ] && add title "$TITLE"
+        ;;
+    done)
+        [ $NPOS -ge 1 ] || die "usage: notch done ID [TEXT]"
+        add id "$P1"
+        [ $NPOS -ge 2 ] && add text "$REST"
+        ;;
+    remove)
+        [ $NPOS -eq 1 ] || die "usage: notch remove ID"
+        add id "$P1"
+        ;;
+    open)
+        [ $NPOS -le 1 ] || die "usage: notch open [TAB]"
+        [ $NPOS -eq 1 ] && add tab "$P1"
+        ;;
+    close | state)
+        [ $NPOS -eq 0 ] || die "usage: notch $CMD"
+        ;;
+esac
+
+# --- send ----------------------------------------------------------------------
+
+[ -S "$SOCK" ] || die "Dynamic Notch isn't running (no socket at $SOCK)"
+TOKEN=$(/bin/cat "$TOKEN_FILE" 2>/dev/null) || die "Dynamic Notch isn't running (can't read $TOKEN_FILE)"
+case $TOKEN in
+    "" | *[!0-9a-f]*) die "Dynamic Notch's token file is damaged; restart the app" ;;
+esac
+case $CMD in
+    # The app itself answers these, not the activity commands.
+    close | state) LINE="{\"type\":\"app\",\"token\":\"$TOKEN\",\"command\":\"$CMD\"}" ;;
+    *) LINE="{\"type\":\"cli\",\"token\":\"$TOKEN\",\"cmd\":\"$CMD\"$MSG}" ;;
+esac
+
+TMP=$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/notch.XXXXXX") || die "can't create a temporary folder"
+trap '/bin/rm -rf "$TMP"' EXIT
+trap 'exit 1' HUP INT TERM
+trap '' PIPE
+/usr/bin/mkfifo "$TMP/in" || die "can't create a pipe in $TMP"
+
+/usr/bin/nc -U -w 3 "$SOCK" < "$TMP/in" > "$TMP/out" 2>/dev/null &
+NC=$!
+exec 3> "$TMP/in"
+printf '%s\n' "$LINE" >&3 2>/dev/null
+wait $NC
+STATUS=$?
+exec 3>&-
+
+REPLY=$(/bin/cat "$TMP/out")
+if [ "$CMD" = close ]; then exit 0; fi
+if [ "$CMD" = state ]; then
+    [ -n "$REPLY" ] || die "no answer from Dynamic Notch (it may be restarting, or older than this command)"
+    printf '%s' "$REPLY" | /usr/bin/plutil -convert json -r -o - -- - 2>/dev/null || printf '%s\n' "$REPLY"
+    exit 0
+fi
+case $REPLY in
+    *'"ok":true'* | *'"ok": true'*) exit 0 ;;
+    *'"ok":false'* | *'"ok": false'*)
+        ERR=$(printf '%s\n' "$REPLY" | reply_error)
+        die "${ERR:-Dynamic Notch refused the command}"
+        ;;
+    "")
+        [ $STATUS -eq 0 ] || die "Dynamic Notch isn't running (can't connect to $SOCK)"
+        die "no answer from Dynamic Notch (it may be restarting, or older than this command)"
+        ;;
+    *) die "unexpected answer from Dynamic Notch: $REPLY" ;;
+esac

@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>local.dynamicnotch</string>
+	<key>CFBundleName</key>
+	<string>Dynamic Notch</string>
+	<key>CFBundleDisplayName</key>
+	<string>Dynamic Notch</string>
+	<key>CFBundleExecutable</key>
+	<string>DynamicNotch</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>26.0</string>
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<!-- Commands run in the terminal tabs count as Dynamic Notch for these prompts, and
+	     macOS refuses (or kills the command) when the matching string is missing. So each
+	     string names the app's own use, if any, and the terminal. -->
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>For your next events and meeting alerts in the notch, or for a command you run in the Dynamic Notch terminal.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>For your next events and meeting alerts in the notch, or for a command you run in the Dynamic Notch terminal.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>For the Spotify and Music controls in the notch, or for a command you run in the Dynamic Notch terminal (such as osascript).</string>
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>For download progress and finished downloads in the notch, or for a command you run in the Dynamic Notch terminal.</string>
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>For a command you run in the Dynamic Notch terminal, or a file you keep on the shelf.</string>
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>For Quick Capture, a file you keep on the shelf, or a command you run in the Dynamic Notch terminal.</string>
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>For a command you run in the Dynamic Notch terminal, or a file you keep on the shelf.</string>
+	<key>NSNetworkVolumesUsageDescription</key>
+	<string>For a command you run in the Dynamic Notch terminal, or a file you keep on the shelf.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>For the prompter's voice follow (off unless you turn it on), or for a command you run in the Dynamic Notch terminal.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>For the prompter's voice follow (off unless you turn it on), or for a command you run in the Dynamic Notch terminal.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>For a command you run in the Dynamic Notch terminal; Dynamic Notch itself doesn't use the camera.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>For a command you run in the Dynamic Notch terminal; Dynamic Notch itself doesn't record system audio.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>For a command you run in the Dynamic Notch terminal; Dynamic Notch itself doesn't use Bluetooth.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>For a command you run in the Dynamic Notch terminal; Dynamic Notch itself doesn't use Bluetooth.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>For a command you run in the Dynamic Notch terminal; Dynamic Notch itself doesn't read your contacts.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>For a command you run in the Dynamic Notch terminal; Dynamic Notch itself doesn't use your photos.</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>For a command you run in the Dynamic Notch terminal; Dynamic Notch itself doesn't use your reminders.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>For a command you run in the Dynamic Notch terminal; Dynamic Notch itself doesn't use your reminders.</string>
+	<key>NSLocationUsageDescription</key>
+	<string>For a command you run in the Dynamic Notch terminal; Dynamic Notch itself doesn't use your location.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>For a command you run in the Dynamic Notch terminal; Dynamic Notch itself doesn't use your location.</string>
+	<key>NSSystemAdministrationUsageDescription</key>
+	<string>For a command you run in the Dynamic Notch terminal; Dynamic Notch itself doesn't change system settings.</string>
+</dict>
+</plist>

@@ -1,0 +1,19 @@
+.DS_Store
+.env
+.env.*
+# build output lives in ~/Library/Application Support/DynamicNotch, but just in case
+.build/
+.swiftpm/
+*.app/
+build/
+DerivedData/
+xcuserdata/
+# personal working doc (schedule, settings, asks), kept local
+/SPEC.md
+# signing material and runtime state
+*.p12
+*.pem
+*.key
+*.cer
+*.mobileprovision
+bridge.token
