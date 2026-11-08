@@ -7,6 +7,13 @@ struct AgentsUsageWindow: Codable, Equatable, Identifiable {
     var title: String       // "5-hour", "Weekly", "Opus weekly"
     var percent: Double     // 0...100
     var resetsAt: Date?
+
+    /// Nil once the window has reset: the saved value belongs to the window before, and
+    /// what's used since is unknown until the next check.
+    func percent(at now: Date) -> Double? {
+        if let resetsAt, resetsAt <= now { return nil }
+        return percent
+    }
 }
 
 struct AgentsUsageSnapshot: Codable, Equatable {
@@ -31,7 +38,7 @@ enum AgentsUsageProblem: Equatable {
     var message: String {
         switch self {
         case .signedOut: "Sign in to Claude Code again"
-        case .waitingForClaudeCode: "Updates when Claude Code next runs"
+        case .waitingForClaudeCode: "Sign-in expired; run claude once to renew it"
         case .notSignedIn: "Sign in to Claude Code to see limits"
         case .keychainDenied: "No Keychain access; click to retry"
         case .offline: "Offline"
@@ -41,8 +48,9 @@ enum AgentsUsageProblem: Equatable {
         }
     }
 
-    /// Shown in orange. An idle Claude Code's expired token is expected, not an error.
-    var isError: Bool { self != .waitingForClaudeCode }
+    /// Shown in orange. An expired token is one too: the app has Claude Code renew it, so
+    /// one that stays expired means the values shown are old.
+    var isError: Bool { true }
 }
 
 /// What the views show: the last values, and why they may be old.
@@ -223,16 +231,32 @@ enum AgentsUsageClient {
         return URLSession(configuration: c)
     }()
 
-    static func fetch() async -> Result {
-        let (credentials, status) = await withCheckedContinuation { (done: CheckedContinuation<(Data, Int32), Never>) in
-            DispatchQueue.global(qos: .utility).async { done.resume(returning: readKeychain()) }
+    /// `renew`: when the token has expired, have Claude Code renew it first.
+    static func fetch(renew: Bool = false) async -> Result {
+        func keychain() async -> (Data, Int32) {
+            await withCheckedContinuation { (done: CheckedContinuation<(Data, Int32), Never>) in
+                DispatchQueue.global(qos: .utility).async { done.resume(returning: readKeychain()) }
+            }
         }
+        var (credentials, status) = await keychain()
         if let problem = keychainProblem(status: status) { return .problem(problem, retryAfter: nil) }
+        var state = AgentsUsageParser.token(from: credentials, now: Date())
+        if renew, state == .expired(canRefresh: true) {
+            let renewed = await withCheckedContinuation { (done: CheckedContinuation<Bool, Never>) in
+                DispatchQueue.global(qos: .utility).async { done.resume(returning: AgentsTokenRenewal.run()) }
+            }
+            if renewed {
+                (credentials, status) = await keychain()
+                if let problem = keychainProblem(status: status) { return .problem(problem, retryAfter: nil) }
+                state = AgentsUsageParser.token(from: credentials, now: Date())
+            }
+        }
         let token: String
-        switch AgentsUsageParser.token(from: credentials, now: Date()) {
+        switch state {
         case .ok(let t): token = t
         // The app never renews the token itself: Claude Code's renewal can replace the refresh
-        // token, and a second writer to its Keychain item could sign you out for real.
+        // token, and a second writer to its Keychain item could sign you out for real. It has
+        // Claude Code do it instead (AgentsTokenRenewal).
         case .expired(canRefresh: true): return .problem(.waitingForClaudeCode, retryAfter: nil)
         case .expired(canRefresh: false): return .problem(.signedOut, retryAfter: nil)
         case .missing: return .problem(.notSignedIn, retryAfter: nil)
@@ -289,6 +313,55 @@ enum AgentsUsageClient {
     }
 }
 
+/// Has Claude Code renew its own sign-in. The Claude desktop app signs in on its own, so
+/// with only the desktop app in use, the `claude` command's token in the Keychain expires
+/// and stays expired. `claude -p /usage` is a local command (no model request, nothing
+/// counted against your limits) that renews the token on its way to the same endpoint.
+/// Hooks are off for it, so it never shows up as a session, and nothing is saved.
+enum AgentsTokenRenewal {
+    /// Where `claude` usually is; an app started at login doesn't get the shell's PATH.
+    static func findClaude() -> URL? {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let dirs = ["\(home)/homebrew/bin", "/opt/homebrew/bin", "/usr/local/bin", "\(home)/.local/bin",
+                    "\(home)/.claude/local", "\(home)/.npm-global/bin", "\(home)/.bun/bin", "\(home)/.volta/bin"]
+        for dir in dirs {
+            let path = dir + "/claude"
+            if FileManager.default.isExecutableFile(atPath: path) { return URL(fileURLWithPath: path) }
+        }
+        return nil
+    }
+
+    /// True when `claude` ran and exited cleanly. Blocks for up to 60 s; call off the main thread.
+    static func run() -> Bool {
+        guard let claude = findClaude() else {
+            AgentsFeature.log.info("usage check: no claude command found to renew the sign-in")
+            return false
+        }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("dynamicnotch-renew", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let p = Process()
+        p.executableURL = claude
+        p.arguments = ["-p", "/usage", "--no-session-persistence", "--settings", #"{"disableAllHooks":true}"#]
+        p.currentDirectoryURL = dir
+        var env = ProcessInfo.processInfo.environment
+        env["PATH"] = claude.deletingLastPathComponent().path + ":" + (env["PATH"] ?? "/usr/bin:/bin")
+        p.environment = env
+        p.standardInput = FileHandle.nullDevice
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        let done = DispatchSemaphore(value: 0)
+        p.terminationHandler = { _ in done.signal() }
+        do { try p.run() } catch { return false }
+        if done.wait(timeout: .now() + 60) == .timedOut {
+            p.terminate()
+            AgentsFeature.log.info("usage check: claude took too long renewing the sign-in")
+            return false
+        }
+        AgentsFeature.log.info("usage check: had claude renew the sign-in (exit \(p.terminationStatus, privacy: .public))")
+        return p.terminationStatus == 0
+    }
+}
+
 /// Checks usage every 5 minutes, and 30 s after a turn ends (at most once a minute).
 /// Errors keep the last values, marked stale. Calls `onAlerts` when a window crosses a
 /// threshold in `config.usageAlerts`.
@@ -306,6 +379,7 @@ final class AgentsUsageMonitor {
     private var delay: TimeInterval = AgentsUsageMonitor.interval
     private var lastStopTrigger = Date.distantPast
     private var lastManual = Date.distantPast
+    private var lastRenew = Date.distantPast     // the last time Claude Code was asked to renew the token
     private var signInUntil = Date.distantPast   // checking often while you sign in
     private var wakeObserver: NSObjectProtocol?
 
@@ -374,6 +448,7 @@ final class AgentsUsageMonitor {
         let now = Date()
         guard running, delay <= Self.interval, now.timeIntervalSince(lastManual) >= 30 else { return }
         lastManual = now
+        lastRenew = .distantPast      // and have Claude Code renew an expired sign-in now
         paused = false
         schedule(after: 0)
     }
@@ -399,13 +474,15 @@ final class AgentsUsageMonitor {
     private func fetch() {
         guard running, !fetching else { return }
         fetching = true
+        // At most every 15 minutes; a renewal that works lasts about 8 hours.
+        let renew = Date().timeIntervalSince(lastRenew) > 900
         Task { [weak self] in
-            let result = await AgentsUsageClient.fetch()
-            self?.finish(result)
+            let result = await AgentsUsageClient.fetch(renew: renew)
+            self?.finish(result, triedRenewal: renew)
         }
     }
 
-    private func finish(_ result: AgentsUsageClient.Result) {
+    private func finish(_ result: AgentsUsageClient.Result, triedRenewal: Bool = false) {
         fetching = false
         guard running else { return }
         switch result {
@@ -422,6 +499,7 @@ final class AgentsUsageMonitor {
             DispatchQueue.global(qos: .utility).async { file.save(cache) }
         case .problem(let problem, let retryAfter):
             store.usage.problem = problem
+            if problem == .waitingForClaudeCode && triedRenewal { lastRenew = Date() }   // tried; still expired
             switch problem {
             case .rateLimited:
                 delay = min(6 * 3600, max(retryAfter ?? 0, min(1800, max(delay * 2, 600))))

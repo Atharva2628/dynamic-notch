@@ -36,6 +36,7 @@ extension AgentsFeature {
               "agents cost: Haiku 5.5 costs more once the whole prompt passes 100,000 tokens")
         check(near(AgentsPricing.cost(AgentsCostUsage(model: "claude-fable-5-1", read: 1_000_000)), 0.25)
               && near(AgentsPricing.cost(AgentsCostUsage(model: "claude-sonnet-5-5", write5m: 1_000_000)), 2.5)
+              && near(AgentsPricing.cost(AgentsCostUsage(model: "claude-sonnet-5-5", read: 1_000_000)), 0.2)
               && near(AgentsPricing.cost(AgentsCostUsage(model: "claude-opus-4-1", output: 1_000_000)), 75),
               "agents cost: cache reads and writes and older models use their own rates")
         check(near(AgentsPricing.cost(AgentsCostUsage(model: "claude-haiku-4-5", webSearches: 3)), 0.03)
@@ -78,6 +79,10 @@ extension AgentsFeature {
         var r = scanner.scan(now: now, save: false)
         check(near(r.today, 20) && near(r.week, 30) && near(r.month, 30) && r.unpriced == 1,
               "agents cost: each response counts once across repeated lines and copied files; old, synthetic and user lines don't")
+        check(near(r.all.cost, 50) && r.firstDay == scanner.day(now.addingTimeInterval(-40 * 86_400))
+              && near(r.fiveHour.cost, 20) && r.fiveHour.tokens == 1_000_000 && r.day.tokens == 1_000_000
+              && r.last7.tokens == 2_000_000 && r.all.tokens == 3_000_000 && r.all.output == 3_000_000,
+              "agents cost: the first scan counts everything on disk for all time; 5 hours, today and 7 days count tokens too")
         check(r.models.map(\.id) == ["opus-5-5", "sonnet-5-5"] && r.days.count == 14 && near(r.days.last?.cost, 20)
               && near(r.sessions["s1"], 20) && near(r.sessions["s2"], 10),
               "agents cost: per-model, per-day and per-session totals")
@@ -88,8 +93,12 @@ extension AgentsFeature {
             try? h.write(contentsOf: Data((line("m3", "r3", "claude-haiku-5-5", 1_000_000, daysAgo: 0.05) + "\n" + #"{"type":"assistant","#).utf8))
             try? h.close()
         }
+        // A later file holding old history (a resumed session copies it) adds nothing.
+        try? (line("old2", "ro2", "claude-opus-5-5", 1_000_000, daysAgo: 45) + "\n")
+            .write(to: project.appendingPathComponent("c.jsonl"), atomically: true, encoding: .utf8)
         r = scanner.scan(now: now, save: false)
-        check(near(r.today, 20.5), "agents cost: the next scan reads only what was appended")
+        check(near(r.today, 20.5) && near(r.fiveHour.cost, 20.5) && near(r.all.cost, 50.5),
+              "agents cost: the next scan reads only what was appended, and old lines in a new file don't count")
         // A rewritten (shorter) file is read again, without counting anything twice.
         try? (line("m2", "r2", "claude-sonnet-5-5", 1_000_000, daysAgo: 1.1, session: "s2") + "\n").write(to: b, atomically: true, encoding: .utf8)
         r = scanner.scan(now: now, save: false)
@@ -123,7 +132,10 @@ extension AgentsFeature {
 
         check(AgentsCostFormat.dollars(0.42) == "$0.42" && AgentsCostFormat.dollars(184.2) == "$184"
               && AgentsCostFormat.dollars(1240.4) == "$1,240" && AgentsCostFormat.dollars(96.3, compact: true) == "$96" && AgentsCostFormat.modelName("opus-5-5") == "Opus 5.5"
-              && AgentsCostFormat.tokens(612_000_000) == "612.0M" && AgentsCostFormat.tokens(45_000) == "45K",
+              && AgentsCostFormat.tokens(612_000_000) == "612.0M" && AgentsCostFormat.tokens(45_000) == "45K"
+              && AgentsCostFormat.tokens(6_698_700_000) == "6.7B"
+              && AgentsCostFormat.breakdown(AgentsCostTotals(tokens: 1_100_000, output: 50_000, read: 1_000_000, written: 45_000))
+              == "1.1M tokens: 1.0M cache reads, 45K cache writes, 50K output, 5.0K input",
               "agents cost: dollars, model names and token counts read naturally")
     }
 }

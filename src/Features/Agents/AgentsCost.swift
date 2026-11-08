@@ -56,7 +56,7 @@ enum AgentsPricing {
         case "opus-5", "opus-4-8": return fast ? .standard(10, 50) : .standard(5, 25)
         case "opus-4-7", "opus-4-6", "opus-4-5": return .standard(5, 25)
         case "opus-4-1", "opus-4-0", "opus-3": return .standard(15, 75)
-        case "sonnet-5-5": return .standard(2, 10, readFactor: 0.05)
+        case "sonnet-5-5": return .standard(2, 10)   // reads $0.20, same as Opus 5.5
         case "sonnet-5": return .standard(2, 10)
         case "sonnet-4-6", "sonnet-4-5", "sonnet-4-0", "sonnet-3-7", "sonnet-3-5": return .standard(3, 15)
         case "haiku-5-5": return promptTokens > 100_000 ? .standard(0.5, 2.5) : .standard(0.1, 0.5)
@@ -141,19 +141,35 @@ struct AgentsCostUsage: Equatable {
     }
 }
 
-/// Totals for one model on one day.
+/// Totals for one model on one day, or for all models in one 10-minute slot.
 struct AgentsCostTotals: Codable, Equatable {
     var cost: Double = 0
-    var tokens: Int = 0
+    var tokens: Int = 0         // everything: input, cache writes, cache reads, output
     var output: Int = 0
+    var read: Int = 0           // cache reads
+    var written: Int = 0        // cache writes
     var messages: Int = 0
 
     mutating func add(_ dollars: Double, _ u: AgentsCostUsage) {
         cost += dollars
         tokens += u.tokens
         output += u.output
+        read += u.read
+        written += u.write5m + u.write1h
         messages += 1
     }
+
+    mutating func add(_ t: AgentsCostTotals) {
+        cost += t.cost
+        tokens += t.tokens
+        output += t.output
+        read += t.read
+        written += t.written
+        messages += t.messages
+    }
+
+    /// Uncached input: what's left.
+    var input: Int { max(0, tokens - output - read - written) }
 }
 
 /// What the views show.
@@ -169,9 +185,17 @@ struct AgentsCostReport: Equatable {
         var cost: Double
     }
 
-    var today: Double = 0
-    var week: Double = 0        // the last 7 days, today included
-    var month: Double = 0       // the last 30 days
+    var fiveHour = AgentsCostTotals()   // the last 5 hours, in 10-minute steps
+    var day = AgentsCostTotals()        // today (since midnight)
+    var last7 = AgentsCostTotals()      // the last 7 days, today included
+    var last30 = AgentsCostTotals()     // the last 30 days
+    var all = AgentsCostTotals()        // everything counted since `firstDay`
+    var firstDay: String?               // the oldest day in `all`
+
+    var today: Double { day.cost }
+    var week: Double { last7.cost }
+    var month: Double { last30.cost }
+
     var models: [Model] = []    // the last 30 days, most expensive first
     var days: [Day] = []        // the last 14 days, oldest first
     var sessions: [String: Double] = [:]   // session id -> cost in the last 35 days
@@ -190,22 +214,32 @@ final class AgentsCostScanner {
         struct Session: Codable { var cost: Double; var day: String }
         /// A response already read: its day, the largest output count so far (a streamed
         /// response's earlier lines carry partial counts), and whether it was counted.
-        struct Seen: Codable { var day: String; var output: Int; var counted: Bool }
-        var version = 2
+        struct Seen: Codable { var day: String; var output: Int; var counted: Bool; var slot: Int? = nil }
+        var version = 3
         var zone: String? = nil                                // the time zone the days are in
         var files: [String: File] = [:]
-        var days: [String: [String: AgentsCostTotals]] = [:]   // day -> pricing key -> totals
+        /// day -> pricing key -> totals. Kept for good (a few KB a month), so "all time"
+        /// outlives Claude Code deleting old transcripts.
+        var days: [String: [String: AgentsCostTotals]] = [:]
+        var slots: [String: AgentsCostTotals] = [:]            // 10-minute slot (epoch / 600) -> totals, last 2 days
         var unpriced: [String: Int] = [:]                      // day -> responses with no price
         var sessions: [String: Session] = [:]
         var seen: [String: Seen] = [:]                         // message id + request id (or tool use id) -> what was counted
     }
 
+    /// How long responses are remembered for de-duplication (and sessions for their rows).
+    /// Lines older than this are only counted on the very first scan: later, an old line is
+    /// history a resumed session copied, which was counted when it was written.
     static let keepDays = 35
+    static let slotSeconds = 600
+    static let keepSlots = 2 * 86_400 / 600
     private(set) var index = Index()
     private let root: URL
     private let file: JSONFile<Index>?
     private var dirty = false
     private var loaded = false
+    private var scanTime = Date()        // the scan's `now`
+    private var sessionsFrom = ""        // the oldest day session rows count (the first scan reads older ones too)
     private var calendar: Calendar
     private let followsSystemZone: Bool
     private let dayFormat: DateFormatter
@@ -254,9 +288,13 @@ final class AgentsCostScanner {
     @discardableResult
     func scan(now: Date = Date(), save: Bool = true) -> AgentsCostReport {
         loadIfNeeded()
-        let cutoff = day(calendar.date(byAdding: .day, value: -Self.keepDays, to: now) ?? now)
-        prune(before: cutoff)
-        let oldest = calendar.date(byAdding: .day, value: -Self.keepDays, to: now) ?? .distantPast
+        scanTime = now
+        let first = index.files.isEmpty     // nothing read yet: count everything on disk
+        let keepFrom = day(calendar.date(byAdding: .day, value: -Self.keepDays, to: now) ?? now)
+        prune(before: keepFrom, slotsBefore: Self.slot(now) - Self.keepSlots)
+        let cutoff = first ? "" : keepFrom
+        sessionsFrom = keepFrom
+        let oldest = first ? .distantPast : calendar.date(byAdding: .day, value: -Self.keepDays, to: now) ?? .distantPast
         var present = Set<String>()
         let keys: [URLResourceKey] = [.fileSizeKey, .contentModificationDateKey, .creationDateKey]
         var found: [(url: URL, size: Int64, modified: Date, created: Date)] = []
@@ -336,6 +374,7 @@ final class AgentsCostScanner {
               let date = isoFractional.date(from: stamp) ?? iso.date(from: stamp) else { return }
         let day = day(date)
         guard day >= cutoff else { return }
+        let slot = Self.slot(date)
         let session = json["sessionId"] as? String
         // Each content block is its own line, so a WebSearch call can be on any of them.
         if let blocks = message["content"] as? [[String: Any]] {
@@ -346,6 +385,7 @@ final class AgentsCostScanner {
                 t.cost += AgentsPricing.webSearchCall
                 t.messages += 1
                 index.days[day, default: [:]]["web-search"] = t
+                addToSlot(slot, cost: AgentsPricing.webSearchCall)
                 addToSession(session, AgentsPricing.webSearchCall, day: day)
             }
         }
@@ -372,45 +412,66 @@ final class AgentsCostScanner {
                     t.output += more
                     index.days[prev.day]?[pricing] = t
                 }
+                if let s = prev.slot, var t = index.slots[String(s)] {
+                    t.cost += extra
+                    t.tokens += more
+                    t.output += more
+                    index.slots[String(s)] = t
+                }
                 addToSession(session, extra, day: prev.day)
                 return
             }
             // Its first line had no tokens; count this one if it has.
             guard usage.tokens > 0, let pricing, let dollars else { return }
-            index.seen[key] = Index.Seen(day: prev.day, output: usage.output, counted: true)
+            let s = prev.slot ?? slot
+            index.seen[key] = Index.Seen(day: prev.day, output: usage.output, counted: true, slot: s)
             index.days[prev.day, default: [:]][pricing, default: AgentsCostTotals()].add(dollars, usage)
+            addToSlot(s, dollars, usage)
             addToSession(session, dollars, day: prev.day)
             return
         }
 
         guard usage.tokens > 0, let pricing, let dollars else {
-            index.seen[key] = Index.Seen(day: day, output: usage.output, counted: false)
+            index.seen[key] = Index.Seen(day: day, output: usage.output, counted: false, slot: slot)
             if usage.tokens > 0, model != "<synthetic>" { index.unpriced[day, default: 0] += 1 }
             return
         }
-        index.seen[key] = Index.Seen(day: day, output: usage.output, counted: true)
+        index.seen[key] = Index.Seen(day: day, output: usage.output, counted: true, slot: slot)
         index.days[day, default: [:]][pricing, default: AgentsCostTotals()].add(dollars, usage)
+        addToSlot(slot, dollars, usage)
         addToSession(session, dollars, day: day)
     }
 
+    static func slot(_ date: Date) -> Int { Int(floor(date.timeIntervalSince1970 / Double(slotSeconds))) }
+
+    /// Only the last 2 days have slots; older lines (the first scan) skip them.
+    private func addToSlot(_ slot: Int, _ dollars: Double = 0, _ usage: AgentsCostUsage? = nil, cost: Double = 0) {
+        guard slot >= Self.slot(scanTime) - Self.keepSlots else { return }
+        var t = index.slots[String(slot)] ?? AgentsCostTotals()
+        if let usage { t.add(dollars, usage) } else { t.cost += cost; t.messages += 1 }
+        index.slots[String(slot)] = t
+    }
+
     private func addToSession(_ session: String?, _ dollars: Double, day: String) {
-        guard let session else { return }
+        guard let session, day >= sessionsFrom else { return }
         var s = index.sessions[session] ?? Index.Session(cost: 0, day: day)
         s.cost += dollars
         s.day = max(s.day, day)
         index.sessions[session] = s
     }
 
-    private func prune(before cutoff: String) {
-        let days = index.days.keys.filter { $0 < cutoff }
+    /// Day totals stay; what's only needed for de-duplication, session rows and the 5-hour
+    /// figure goes.
+    private func prune(before cutoff: String, slotsBefore: Int) {
         let seen = index.seen.filter { $0.value.day < cutoff }.map(\.key)
         let sessions = index.sessions.filter { $0.value.day < cutoff }.map(\.key)
         let unpriced = index.unpriced.keys.filter { $0 < cutoff }
-        guard !days.isEmpty || !seen.isEmpty || !sessions.isEmpty || !unpriced.isEmpty else { return }
-        for d in days { index.days[d] = nil }
+        let slots = index.slots.keys.filter { (Int($0) ?? 0) < slotsBefore }
+        guard !seen.isEmpty || !sessions.isEmpty || !unpriced.isEmpty || !slots.isEmpty else { return }
         for k in seen { index.seen[k] = nil }
         for s in sessions { index.sessions[s] = nil }
         for d in unpriced { index.unpriced[d] = nil }
+        for s in slots { index.slots[s] = nil }
         dirty = true
     }
 
@@ -420,11 +481,20 @@ final class AgentsCostScanner {
         let today = dayKey(0), weekStart = dayKey(6), monthStart = dayKey(29)
         var r = AgentsCostReport()
         var models: [String: AgentsCostReport.Model] = [:]
-        for (d, perModel) in index.days where d >= monthStart && d <= today {
-            let total = perModel.values.reduce(0) { $0 + $1.cost }
-            r.month += total
-            if d >= weekStart { r.week += total }
-            if d == today { r.today += total }
+        let fiveHourStart = Self.slot(now.addingTimeInterval(-5 * 3600)) + 1, current = Self.slot(now)
+        for (s, t) in index.slots {
+            guard let s = Int(s), s >= fiveHourStart, s <= current else { continue }
+            r.fiveHour.add(t)
+        }
+        for (d, perModel) in index.days where d <= today {
+            var total = AgentsCostTotals()
+            for t in perModel.values { total.add(t) }
+            r.all.add(total)
+            if r.firstDay.map({ d < $0 }) ?? true { r.firstDay = d }
+            guard d >= monthStart else { continue }
+            r.last30.add(total)
+            if d >= weekStart { r.last7.add(total) }
+            if d == today { r.day.add(total) }
             for (key, t) in perModel {
                 var m = models[key] ?? AgentsCostReport.Model(id: key, cost: 0, tokens: 0)
                 m.cost += t.cost
@@ -464,14 +534,21 @@ enum AgentsCostFormat {
         return family.prefix(1).uppercased() + family.dropFirst() + (version.isEmpty ? "" : " " + version)
     }
 
-    /// "1.2M", "845K", "312".
+    /// "6.7B", "1.2M", "845K", "312".
     static func tokens(_ n: Int) -> String {
         switch n {
+        case 1_000_000_000...: return String(format: "%.1fB", Double(n) / 1_000_000_000)
         case 1_000_000...: return String(format: "%.1fM", Double(n) / 1_000_000)
         case 10_000...: return "\(n / 1000)K"
         case 1000...: return String(format: "%.1fK", Double(n) / 1000)
         default: return "\(n)"
         }
+    }
+
+    /// "6.7B tokens: 6.6B cache reads, 73M cache writes, 31M output, 70K input".
+    static func breakdown(_ t: AgentsCostTotals) -> String {
+        "\(tokens(t.tokens)) tokens: \(tokens(t.read)) cache reads, \(tokens(t.written)) cache writes, "
+            + "\(tokens(t.output)) output, \(tokens(t.input)) input"
     }
 }
 

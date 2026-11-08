@@ -150,9 +150,9 @@ choose Reload Settings.
 | **Agents (Claude Code)** | | |
 | `agentApprovals` | `true` | Allow and Deny permission requests from the notch; `false` only shows that one is waiting |
 | `agentSound` | `"Sosumi"` | sound when a session finishes; `""` for silent |
-| `usageSource` | `"keychain"` | usage limits from Claude Code's sign-in; `"off"` hides them |
+| `usageSource` | `"keychain"` | usage limits from Claude Code's sign-in, which the app has Claude Code renew (`claude -p /usage`, no model request) when it expires; `"off"` hides them |
 | `usageAlerts` | `[95, 80]` | alert at these percents of the 5-hour or weekly limit |
-| `apiCostEstimate` | `true` | what your Claude Code tokens would cost at API prices (Agents tab, Home card, Usage tab) |
+| `apiCostEstimate` | `true` | what your Claude Code tokens would cost at API prices, and how many tokens, for 5 hours, today, 7 and 30 days, and all time (Agents tab, Home card, Usage tab) |
 | `agentAwayStatus` | `true` | show Agent Away's status |
 | **Clipboard and Shelf** | | |
 | `clipboardHotkey` | `"ctrl+alt+v"` | opens the clipboard history |

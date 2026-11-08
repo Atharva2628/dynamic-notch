@@ -32,7 +32,10 @@ if arguments.contains("--cost") {
     let started = Date()
     let r = AgentsCostScanner(root: AgentsCostScanner.defaultRoot, store: nil).scan(save: false)
     print(String(format: "scanned in %.1f s", Date().timeIntervalSince(started)))
-    print("today \(AgentsCostFormat.dollars(r.today)) · 7 days \(AgentsCostFormat.dollars(r.week)) · 30 days \(AgentsCostFormat.dollars(r.month))")
+    for (label, t) in [("5 hours", r.fiveHour), ("today", r.day), ("7 days", r.last7), ("30 days", r.last30),
+                       ("all time (since \(r.firstDay ?? "-"))", r.all)] {
+        print("\(label): \(AgentsCostFormat.dollars(t.cost)), \(AgentsCostFormat.breakdown(t))")
+    }
     for m in r.models { print("  \(AgentsCostFormat.modelName(m.id)): \(AgentsCostFormat.dollars(m.cost)), \(AgentsCostFormat.tokens(m.tokens)) tokens") }
     print("last 14 days:", r.days.map { "\($0.id.suffix(5)) \(AgentsCostFormat.dollars($0.cost))" }.joined(separator: ", "))
     if r.unpriced > 0 { print("unpriced responses: \(r.unpriced)") }

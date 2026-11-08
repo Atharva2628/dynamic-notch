@@ -526,7 +526,9 @@ extension AgentsFeature {
          "usageProblem": store.usage.problem.map { String(describing: $0) } ?? "none",
          "agentAway": store.away.map { String(describing: $0) } ?? "hidden",
          "cost": store.cost.map { c in
-             c.scanning ? "scanning" : "today \(AgentsCostFormat.dollars(c.today)), 7 days \(AgentsCostFormat.dollars(c.week)), 30 days \(AgentsCostFormat.dollars(c.month))"
+             c.scanning ? "scanning" : [("5h", c.fiveHour), ("today", c.day), ("7 days", c.last7), ("30 days", c.last30), ("all", c.all)]
+                 .map { "\($0.0) \(AgentsCostFormat.dollars($0.1.cost)) \(AgentsCostFormat.tokens($0.1.tokens)) tokens" }
+                 .joined(separator: ", ")
          } ?? "off"]
     }
 }

@@ -251,9 +251,13 @@ extension AgentsFeature {
               && AgentsUsageState(enabled: true, snapshot: usage(10), problem: .signedOut).status(now: at(120))
               == "Sign in to Claude Code again · updated 2 min ago", "agents: usage goes stale after 15 min or an error")
         check(AgentsUsageState(enabled: true, snapshot: usage(10), problem: .waitingForClaudeCode).status(now: at(120))
-              == "Updates when Claude Code next runs · updated 2 min ago"
-              && !AgentsUsageProblem.waitingForClaudeCode.isError && AgentsUsageProblem.signedOut.isError,
-              "agents: an idle Claude Code's expired token waits for its next run, not shown as an error")
+              == "Sign-in expired; run claude once to renew it · updated 2 min ago"
+              && AgentsUsageProblem.waitingForClaudeCode.isError && AgentsUsageProblem.signedOut.isError,
+              "agents: a token that stays expired after asking Claude Code to renew it shows as an error")
+        let w = AgentsUsageWindow(id: "seven_day", title: "Weekly", percent: 16, resetsAt: at(3600))
+        check(w.percent(at: at(60)) == 16 && w.percent(at: at(3600)) == nil && w.percent(at: at(90_000)) == nil
+              && AgentsUsageWindow(id: "five_hour", title: "5-hour", percent: 0, resetsAt: nil).percent(at: at(90_000)) == 0,
+              "agents: a saved percent isn't shown once its window has reset")
 
         // Process tree.
         let tree: [pid_t: AgentsProcess.Info] = [
@@ -367,8 +371,12 @@ extension AgentsFeature {
             scoped: [AgentsUsageWindow(id: "scoped.fable", title: "Fable weekly", percent: 12, resetsAt: now + 3 * 86400 + 4 * 3600)],
             fetchedAt: now - 120), problem: nil)
         store.away = AgentsAwayStatus(running: true, keepAwake: true, lidClosed: false, askFirst: false, heat: nil)
+        func span(_ cost: Double, _ tokens: Int) -> AgentsCostTotals {
+            AgentsCostTotals(cost: cost, tokens: tokens, output: tokens / 120, read: tokens * 9 / 10, written: tokens / 20, messages: 1)
+        }
         store.cost = AgentsCostReport(
-            today: 18.42, week: 96.30, month: 412.75,
+            fiveHour: span(6.20, 14_300_000), day: span(18.42, 41_000_000), last7: span(96.30, 230_000_000),
+            last30: span(412.75, 662_800_000), all: span(1_204.50, 1_930_000_000), firstDay: "2026-08-02",
             models: [.init(id: "opus-5-5", cost: 380.10, tokens: 612_000_000),
                      .init(id: "sonnet-5-5", cost: 28.40, tokens: 41_000_000),
                      .init(id: "haiku-5-5", cost: 4.25, tokens: 9_800_000)],

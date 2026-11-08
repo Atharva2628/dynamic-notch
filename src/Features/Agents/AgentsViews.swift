@@ -10,8 +10,8 @@ struct AgentsActions {
     var showTab: @MainActor () -> Void = {}                            // the Home card opens the Agents tab
 }
 
-/// The Agents tab: permission requests and sessions on the left, usage limits and Agent
-/// Away on the right.
+/// The Agents tab: permission requests and sessions on the left with the API-price table
+/// under them, usage limits and Agent Away on the right.
 struct AgentsTabView: View {
     @ObservedObject var store: AgentsStore
     let actions: AgentsActions
@@ -19,10 +19,15 @@ struct AgentsTabView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
-            AgentsSessionsColumn(store: store, actions: actions, scrolls: scrolls)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            VStack(alignment: .leading, spacing: 8) {
+                AgentsSessionsColumn(store: store, actions: actions, scrolls: scrolls)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                if let cost = store.cost {
+                    AgentsCostLine(report: cost)
+                }
+            }
             AgentsSideColumn(store: store, actions: actions)
-                .frame(width: 214)
+                .frame(width: 330)
                 .frame(maxHeight: .infinity, alignment: .top)
         }
         .foregroundStyle(.white)
@@ -291,9 +296,6 @@ private struct AgentsSideColumn: View {
                     .font(NotchStyle.smallFont)
                     .foregroundStyle(NotchStyle.tertiary)
             }
-            if let cost = store.cost {
-                AgentsCostLine(report: cost)
-            }
             Spacer(minLength: 0)
             if let away = store.away {
                 AgentsAwayRow(status: away, setKeepAwake: actions.setKeepAwake)
@@ -313,25 +315,19 @@ private struct AgentsUsageSummary: View {
             let now = context.date
             let stale = usage.isStale(now: now)
             VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .top, spacing: 10) {
+                // The closest model limit gets a third ring; the Usage dropdown lists them all.
+                let model = usage.snapshot?.scoped.max { ($0.percent(at: now) ?? -1) < ($1.percent(at: now) ?? -1) }
+                HStack(alignment: .top, spacing: 4) {
                     AgentsRingTile(window: usage.snapshot?.fiveHour, title: "5-hour", stale: stale, now: now)
                     AgentsRingTile(window: usage.snapshot?.weekly, title: "Weekly", stale: stale, now: now)
-                }
-                // The closest model limit; the Usage dropdown lists them all.
-                ForEach(usage.snapshot?.scoped.max { $0.percent < $1.percent }.map { [$0] } ?? []) { w in
-                    HStack(spacing: 6) {
-                        Text(w.title).font(NotchStyle.smallFont).foregroundStyle(NotchStyle.secondary).lineLimit(1)
-                        Spacer(minLength: 4)
-                        Text("\(Int(w.percent.rounded()))%")
-                            .font(.system(size: 11, weight: .semibold))
-                            .monospacedDigit()
-                            .foregroundStyle(AgentsRing.color(w.percent))
+                    if let model {
+                        AgentsRingTile(window: model, title: model.title, stale: stale, now: now)
                     }
-                    .opacity(stale ? 0.55 : 1)
                 }
+                .frame(maxWidth: .infinity)
                 Button(action: refresh) {
                     Text(usage.status(now: now))
-                        .font(.system(size: 10))
+                        .font(.system(size: 11))
                         .foregroundStyle(usage.problem?.isError == true ? Color.orange : NotchStyle.tertiary)
                         .lineLimit(1)
                 }
@@ -374,14 +370,14 @@ private struct AgentsRingTile: View {
 
     var body: some View {
         VStack(spacing: 3) {
-            AgentsRing(percent: window?.percent, size: size, stale: stale)
-            Text(title).font(.system(size: 11, weight: .semibold))
+            AgentsRing(percent: window?.percent(at: now), size: size, stale: stale)
+            Text(title).font(.system(size: 12, weight: .semibold)).lineLimit(1)
             Text(window.map { AgentsFormat.reset($0.resetsAt, now: now).replacingOccurrences(of: "resets ", with: "") } ?? "–")
-                .font(.system(size: 10))
+                .font(.system(size: 11))
                 .foregroundStyle(NotchStyle.tertiary)
                 .lineLimit(1)
         }
-        .frame(width: 98)
+        .frame(width: 106)
     }
 }
 
@@ -490,7 +486,7 @@ struct AgentsHomeCard: View {
                 Text("waiting for you").font(NotchStyle.smallFont).foregroundStyle(NotchStyle.secondary)
             }
             if let cost = store.cost, !cost.scanning {
-                Text("\(AgentsCostFormat.dollars(cost.today)) today at API prices")
+                Text("\(AgentsCostFormat.dollars(cost.today)) · \(AgentsCostFormat.tokens(cost.day.tokens)) tokens today")
                     .font(.system(size: 10))
                     .monospacedDigit()
                     .foregroundStyle(NotchStyle.tertiary)
@@ -515,7 +511,7 @@ struct AgentsHomeCard: View {
 
     private func mini(_ w: AgentsUsageWindow?, _ label: String, _ stale: Bool) -> some View {
         VStack(spacing: 2) {
-            AgentsRing(percent: w?.percent, size: 36, stale: stale)
+            AgentsRing(percent: w?.percent(at: Date()), size: 36, stale: stale)
             Text(label).font(.system(size: 10)).foregroundStyle(NotchStyle.tertiary)
         }
     }
@@ -579,7 +575,7 @@ struct AgentsUsagePanel: View {
 
     private func bigTile(_ w: AgentsUsageWindow?, _ title: String, _ stale: Bool, _ now: Date) -> some View {
         HStack(spacing: 14) {
-            AgentsRing(percent: w?.percent, size: 84, stale: stale)
+            AgentsRing(percent: w?.percent(at: now), size: 84, stale: stale)
             VStack(alignment: .leading, spacing: 3) {
                 Text(title).font(NotchStyle.titleFont)
                 Text(w.map { AgentsFormat.reset($0.resetsAt, now: now) } ?? "No data yet")
@@ -597,10 +593,12 @@ struct AgentsUsagePanel: View {
             Text(w.title).font(NotchStyle.bodyFont).frame(width: 130, alignment: .leading).lineLimit(1)
             ZStack(alignment: .leading) {
                 Capsule().fill(Color.white.opacity(0.12))
-                Capsule().fill(AgentsRing.color(w.percent)).frame(width: max(4, 180 * w.percent / 100))
+                if let p = w.percent(at: now) {
+                    Capsule().fill(AgentsRing.color(p)).frame(width: max(4, 180 * p / 100))
+                }
             }
             .frame(width: 180, height: 6)
-            Text("\(Int(w.percent.rounded()))%").font(NotchStyle.bodyFont).monospacedDigit().frame(width: 40, alignment: .trailing)
+            Text(w.percent(at: now).map { "\(Int($0.rounded()))%" } ?? "–").font(NotchStyle.bodyFont).monospacedDigit().frame(width: 40, alignment: .trailing)
             Text(AgentsFormat.reset(w.resetsAt, now: now)).font(NotchStyle.smallFont).foregroundStyle(NotchStyle.tertiary)
         }
         .opacity(stale ? 0.55 : 1)
@@ -614,32 +612,75 @@ struct AgentsUsagePanel: View {
     }
 }
 
-/// One line in the Agents tab: what your Claude Code tokens would cost at API prices.
+/// The spans the cost views show, shortest first.
+enum AgentsCostSpans {
+    static func list(_ r: AgentsCostReport) -> [(short: String, long: String, totals: AgentsCostTotals)] {
+        [("5h", "Last 5 hours", r.fiveHour), ("today", "Today", r.day), ("7d", "Last 7 days", r.last7),
+         ("30d", "Last 30 days", r.last30), ("all", "All time", r.all)]
+    }
+
+    /// "since Oct 11" for the all-time figure.
+    static func since(_ r: AgentsCostReport) -> String {
+        guard let first = r.firstDay else { return "" }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd"
+        guard let d = f.date(from: first) else { return "since \(first)" }
+        return "since " + d.formatted(.dateTime.month(.abbreviated).day())
+    }
+}
+
+/// The Agents tab's cost block: dollars at API prices and tokens for 5 hours, today, 7 and
+/// 30 days, and all time.
 private struct AgentsCostLine: View {
     let report: AgentsCostReport
 
     var body: some View {
-        HStack(spacing: 6) {
-            Text("API").font(.system(size: 10, weight: .semibold)).foregroundStyle(NotchStyle.tertiary)
-            if report.scanning {
-                Text("adding up…").foregroundStyle(NotchStyle.secondary)
-            } else {
-                figure(report.today, "today", compact: false)
-                figure(report.week, "7d")
-                figure(report.month, "30d")
+        if report.scanning {
+            HStack(spacing: 6) {
+                Text("API $").font(.system(size: 12, weight: .semibold)).foregroundStyle(NotchStyle.tertiary)
+                Text("adding up your transcripts…").foregroundStyle(NotchStyle.secondary)
             }
-            Spacer(minLength: 0)
-        }
-        .font(.system(size: 11))
-        .lineLimit(1)
-        .minimumScaleFactor(0.8)
-        .help("What Claude Code's tokens would cost on the Claude API. Your plan doesn't bill per token.")
-    }
-
-    private func figure(_ value: Double, _ label: String, compact: Bool = true) -> some View {
-        HStack(spacing: 2) {
-            Text(AgentsCostFormat.dollars(value, compact: compact)).fontWeight(.semibold).monospacedDigit().fixedSize()
-            Text(label).foregroundStyle(NotchStyle.tertiary)
+            .font(.system(size: 14))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(NotchStyle.card, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        } else {
+            let spans = AgentsCostSpans.list(report)
+            Grid(alignment: .trailing, horizontalSpacing: 18, verticalSpacing: 2) {
+                GridRow {
+                    Color.clear.frame(width: 1, height: 1)
+                    ForEach(spans, id: \.short) { s in
+                        Text(s.short).foregroundStyle(NotchStyle.tertiary)
+                    }
+                }
+                .font(.system(size: 12))
+                GridRow {
+                    Text("API $").font(.system(size: 12, weight: .semibold)).foregroundStyle(NotchStyle.tertiary)
+                        .gridColumnAlignment(.leading)
+                    ForEach(spans, id: \.short) { s in
+                        Text(AgentsCostFormat.dollars(s.totals.cost, compact: true)).fontWeight(.semibold)
+                    }
+                }
+                GridRow {
+                    Text("tokens").font(.system(size: 12, weight: .semibold)).foregroundStyle(NotchStyle.tertiary)
+                    ForEach(spans, id: \.short) { s in
+                        Text(AgentsCostFormat.tokens(s.totals.tokens)).font(.system(size: 14)).foregroundStyle(NotchStyle.secondary)
+                            .help(s.long + ": " + AgentsCostFormat.breakdown(s.totals))
+                    }
+                }
+            }
+            .font(.system(size: 16))
+            .monospacedDigit()
+            .lineLimit(1)
+            .minimumScaleFactor(0.85)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(NotchStyle.card, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .help("What Claude Code's tokens would cost on the Claude API (your plan doesn't bill per token), "
+                  + "read from this Mac's transcripts. All time is \(AgentsCostSpans.since(report)).")
         }
     }
 }
@@ -663,12 +704,27 @@ private struct AgentsCostPanel: View {
                     .foregroundStyle(NotchStyle.secondary)
             } else {
                 HStack(alignment: .top, spacing: 26) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        total(report.today, "Today")
-                        total(report.week, "Last 7 days")
-                        total(report.month, "Last 30 days")
+                    Grid(alignment: .leading, horizontalSpacing: 8, verticalSpacing: 4) {
+                        ForEach(AgentsCostSpans.list(report), id: \.short) { s in
+                            GridRow {
+                                Text(AgentsCostFormat.dollars(s.totals.cost))
+                                    .font(.system(size: 14, weight: .semibold))
+                                    .monospacedDigit()
+                                    .gridColumnAlignment(.trailing)
+                                Text("\(AgentsCostFormat.tokens(s.totals.tokens)) tok")
+                                    .font(NotchStyle.smallFont)
+                                    .monospacedDigit()
+                                    .foregroundStyle(NotchStyle.secondary)
+                                    .gridColumnAlignment(.trailing)
+                                    .help(AgentsCostFormat.breakdown(s.totals))
+                                Text(s.short == "all" ? "All time, \(AgentsCostSpans.since(report))" : s.long)
+                                    .font(NotchStyle.smallFont)
+                                    .foregroundStyle(NotchStyle.tertiary)
+                            }
+                        }
                     }
-                    .frame(width: 130, alignment: .leading)
+                    .lineLimit(1)
+                    .fixedSize()
                     chart
                     models
                 }
@@ -678,15 +734,6 @@ private struct AgentsCostPanel: View {
                         .foregroundStyle(NotchStyle.tertiary)
                 }
             }
-        }
-    }
-
-    private func total(_ value: Double, _ label: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(AgentsCostFormat.dollars(value))
-                .font(.system(size: 16, weight: .semibold))
-                .monospacedDigit()
-            Text(label).font(NotchStyle.smallFont).foregroundStyle(NotchStyle.secondary)
         }
     }
 
@@ -714,7 +761,7 @@ private struct AgentsCostPanel: View {
                 HStack(spacing: 8) {
                     Text(AgentsCostFormat.modelName(m.id)).font(NotchStyle.bodyFont).frame(width: 82, alignment: .leading)
                     Text(AgentsCostFormat.dollars(m.cost)).font(NotchStyle.bodyFont).monospacedDigit().frame(width: 62, alignment: .trailing)
-                    Text("\(AgentsCostFormat.tokens(m.tokens)) tokens").font(NotchStyle.smallFont).foregroundStyle(NotchStyle.tertiary)
+                    Text("\(AgentsCostFormat.tokens(m.tokens)) tok").font(NotchStyle.smallFont).foregroundStyle(NotchStyle.tertiary)
                 }
                 .lineLimit(1)
             }
