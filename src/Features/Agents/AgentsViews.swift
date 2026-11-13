@@ -315,10 +315,10 @@ private struct AgentsUsageSummary: View {
             let now = context.date
             let stale = usage.isStale(now: now)
             VStack(alignment: .leading, spacing: 4) {
-                // The closest model limit gets a third ring; the Usage dropdown lists them all.
-                let model = usage.snapshot?.scoped.max { ($0.percent(at: now) ?? -1) < ($1.percent(at: now) ?? -1) }
+                // Fable gets the first ring; the closest other model limit gets a third.
+                let model = usage.snapshot?.otherScoped.max { ($0.percent(at: now) ?? -1) < ($1.percent(at: now) ?? -1) }
                 HStack(alignment: .top, spacing: 4) {
-                    AgentsRingTile(window: usage.snapshot?.fiveHour, title: "5-hour", stale: stale, now: now)
+                    AgentsRingTile(window: usage.snapshot?.fable, title: "Fable", stale: stale, now: now)
                     AgentsRingTile(window: usage.snapshot?.weekly, title: "Weekly", stale: stale, now: now)
                     if let model {
                         AgentsRingTile(window: model, title: model.title, stale: stale, now: now)
@@ -497,7 +497,7 @@ struct AgentsHomeCard: View {
             Spacer(minLength: 6)
             if store.usage.enabled {
                 HStack(spacing: 12) {
-                    mini(store.usage.snapshot?.fiveHour, "5 h", stale)
+                    mini(store.usage.snapshot?.fable, "Fable", stale)
                     mini(store.usage.snapshot?.weekly, "week", stale)
                 }
             }
@@ -551,10 +551,10 @@ struct AgentsUsagePanel: View {
                         .foregroundStyle(NotchStyle.secondary)
                 } else {
                     HStack(alignment: .top, spacing: 32) {
-                        bigTile(usage.snapshot?.fiveHour, "5-hour limit", stale, now)
+                        bigTile(usage.snapshot?.fable, "Fable limit", stale, now)
                         bigTile(usage.snapshot?.weekly, "Weekly limit", stale, now)
                     }
-                    if let scoped = usage.snapshot?.scoped, !scoped.isEmpty {
+                    if let scoped = usage.snapshot?.otherScoped, !scoped.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
                             ForEach(scoped) { bar($0, stale, now) }
                         }

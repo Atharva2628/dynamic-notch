@@ -23,6 +23,11 @@ struct AgentsUsageSnapshot: Codable, Equatable {
     var fetchedAt: Date
 
     var windows: [AgentsUsageWindow] { [fiveHour, weekly].compactMap { $0 } + scoped }
+
+    /// The Fable weekly limit, which replaced the 5-hour ring in the UI.
+    var fable: AgentsUsageWindow? { scoped.first { $0.id == "scoped.fable" } }
+    /// Model limits other than Fable's, which already has its own ring.
+    var otherScoped: [AgentsUsageWindow] { scoped.filter { $0.id != "scoped.fable" } }
 }
 
 enum AgentsUsageProblem: Equatable {
